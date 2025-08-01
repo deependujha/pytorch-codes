@@ -121,3 +121,6 @@ nav:
     - Home: index.md
     - Basics:
       - Dataset & Dataloader: 01-basics/01-data/01-dataset-and-dataloader.md
+    - Concepts:
+      - Learning Rate Scheduler: 01-basics/02-concepts/01-learning-rate-scheduler.md
+      - Gradient Clipping: 01-basics/02-concepts/02-gradient-clipping.md
