@@ -57,7 +57,7 @@ jobs:
         run: |
           hugo \
             --gc --minify \
-            --baseURL "https://${{ github.repository_owner }}.github.io/"
+            --baseURL "https://${{ github.repository_owner }}.github.io/pytorch-codes"
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
