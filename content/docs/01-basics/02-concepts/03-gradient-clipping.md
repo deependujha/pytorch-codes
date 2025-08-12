@@ -2,6 +2,7 @@
 title: Gradient Clipping
 type: docs
 prev: docs/01-basics/02-concepts/02-learning-rate-scheduler.md
+next: docs/01-basics/02-concepts/04-transfer-learning.md
 sidebar:
   open: false
 weight: 24
