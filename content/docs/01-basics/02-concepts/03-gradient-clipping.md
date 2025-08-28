@@ -13,11 +13,12 @@ weight: 24
 - after `loss.backward()` & before `optimizer.step()`
 
 ```python
+clip_value = 1.0
+
 optimizer.zero_grad()        
 loss, hidden = model(data, hidden, targets)
 loss.backward()
 
-torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
+torch.nn.utils.clip_grad_norm_(model.parameters(), clip_value) # clip_value - maximum norm
 optimizer.step()
 ```
-
