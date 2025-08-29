@@ -2,6 +2,7 @@
 title: Gradient Accumulation
 type: docs
 prev: docs/01-basics/02-concepts/04-transfer-learning.md
+next: docs/01-basics/02-concepts/06-mixed-precision-training.md
 sidebar:
   open: false
 weight: 25
@@ -144,12 +145,11 @@ Steps for Gradient Accumulation in DDP:
 
 ## FSDP gradient accumulation
 
-- To use gradient accumulation in FSDP, you can follow a similar approach as with DDP.
+- Gradient accumulation in `FSDP1` & `FSDP2` is different. `FSDP1` uses `model.no_sync()` for not synchronizing gradients during intermediate steps, while `FSDP2` relies on `set_requires_gradient_sync()`.
+
+### FSDP1
 
 ```python
-# Create a scaler for AMP
-scaler = torch.cuda.amp.GradScaler()
-
 # Important: Clear gradients before the loop starts
 optimizer.zero_grad()
 
@@ -160,21 +160,36 @@ for i, (data, target) in enumerate(loader):
     if not is_final_step:
         # Intermediate steps: don't sync gradients
         with model.no_sync():
-            with torch.cuda.amp.autocast():
-                out = model(data)
-                loss = criterion(out, target) / accum_steps
-            scaler.scale(loss).backward()
-    else:
-        # Final step: gradients will be synced and we will step
-        with torch.cuda.amp.autocast():
             out = model(data)
             loss = criterion(out, target) / accum_steps
-        scaler.scale(loss).backward()
+            loss.backward()
+    else:
+        # Final step: gradients will be synced and we will step
+        out = model(data)
+        loss = criterion(out, target) / accum_steps
+        loss.backward()
         
         # Now, update the model's weights
-        scaler.step(optimizer)
-        scaler.update()
-        
-        # Clear the gradients for the next accumulation window
+        optimizer.step()
+        optimizer.zero_grad()
+```
+
+### FSDP2
+
+```python
+accumulation_steps = 4
+
+for step, (data, target) in enumerate(dataloader):
+    is_sync_step = ((step + 1) % accumulation_steps == 0)
+
+    # Disable gradient sync for intermediate accumulation steps
+    model.set_requires_gradient_sync(is_sync_step)
+
+    output = model(data)
+    loss = criterion(output, target) / accumulation_steps
+    loss.backward()
+
+    if is_sync_step:
+        optimizer.step()
         optimizer.zero_grad()
 ```
