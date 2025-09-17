@@ -2,6 +2,7 @@
 title: PyTorch Lightning code
 type: docs
 prev: docs/01-basics/03-lightning/01-intro.md
+next: docs/01-basics/03-lightning/03-tuner.md
 sidebar:
   open: false
 weight: 23
