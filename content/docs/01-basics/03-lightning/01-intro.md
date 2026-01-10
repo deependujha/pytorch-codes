@@ -2,7 +2,6 @@
 title: Sample lightning code
 type: docs
 prev: docs/01-basics/03-lightning
-prev: docs/01-basics/03-lightning/02-pytorch-lightning.md
 sidebar:
   open: false
 weight: 22
