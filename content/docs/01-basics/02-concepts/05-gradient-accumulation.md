@@ -6,6 +6,7 @@ next: docs/01-basics/02-concepts/06-mixed-precision-training.md
 sidebar:
   open: false
 weight: 25
+math: true
 ---
 
 Gradient accumulation is a technique used to effectively increase the batch size during training in PyTorch, particularly when hardware constraints (like GPU memory) prevent using a large batch size in a single forward-backward pass.
@@ -80,11 +81,96 @@ for i in range(0, len(data), mini_batch_size):
 # Note: If len(data) % desired_batch_size != 0, handle the remaining data
 ```
 
-#### Key points
+---
 
-- **Loss scaling**: `Dividing the loss by accumulation_steps` ensures the gradients are scaled appropriately, mimicking the effect of averaging gradients over the full batch.
+## Why Do We Scale the Loss in Gradient Accumulation?
+
+Gradient accumulation simulates a larger batch size by splitting it into `n` smaller microbatches and delaying the optimizer step until all microbatches are processed.
+
+Most training setups use **mean reduction** for loss (e.g., `reduction="mean"`). Understanding this is key to why loss scaling is needed.
+
+---
+
+### What a True Large Batch Computes
+
+Assume:
+* Microbatch size = `m`
+* Number of accumulation steps = `n`
+* Total batch size = `n × m`
+
+**For a true large batch**, the loss is the average over all samples:
+
+\[
+L_{\text{large}} = \frac{\text{loss}_1 + \text{loss}_2 + \cdots + \text{loss}_{n \times m}}{n \times m}
+\]
+
+We can regroup this as an average of microbatch averages:
+
+\[
+L_{\text{large}} = \frac{1}{n} \left( \frac{\text{loss}_1 + \cdots + \text{loss}_m}{m} + \frac{\text{loss}_{m+1} + \cdots + \text{loss}_{2m}}{m} + \cdots \right)
+\]
+
+Let's call each microbatch's average loss as `L₁`, `L₂`, ..., `Lₙ`. So:
+
+\[
+L_{\text{large}} = \frac{L_1 + L_2 + \cdots + L_n}{n}
+\]
+
+---
+
+### What Happens in Gradient Accumulation
+
+During gradient accumulation:
+* Each microbatch computes its own mean loss `Lᵢ`
+* We call `.backward()` on each `Lᵢ` separately
+* Gradients from each backward pass are **summed** (accumulated)
+* After `n` accumulations, we do one optimizer step
+
+**Without loss scaling**, the accumulated gradient is:
+
+\[
+\nabla L_1 + \nabla L_2 + \cdots + \nabla L_n
+\]
+
+But the gradient of the true large batch should be:
+
+\[
+\nabla L_{\text{large}} = \nabla \left( \frac{L_1 + L_2 + \cdots + L_n}{n} \right) = \frac{\nabla L_1 + \nabla L_2 + \cdots + \nabla L_n}{n}
+\]
+
+**The problem**: Without scaling, our accumulated gradients are **`n` times too large**, which effectively multiplies the learning rate by `n`.
+
+---
+
+### Solution: Scale the Loss
+
+To match the true large batch gradient, divide each loss by `n` before calling backward:
+
+```python
+(loss / n).backward()
+```
+
+This gives accumulated gradients:
+
+\[
+\frac{\nabla L_1}{n} + \frac{\nabla L_2}{n} + \cdots + \frac{\nabla L_n}{n} = \frac{\nabla L_1 + \nabla L_2 + \cdots + \nabla L_n}{n}
+\]
+
+This **exactly matches** the gradient from true large-batch training.
+
+---
+
+### Key Takeaway
+
+Loss scaling in gradient accumulation ensures the **gradient magnitude matches** that of a true large batch, preserving the same optimization dynamics and effective learning rate.
+
+---
+
+#### Additional Key Points
+
+- **Loss scaling**: Dividing the loss by `accumulation_steps` ensures the gradients are scaled appropriately, mimicking the effect of averaging gradients over the full batch.
 - **Gradient clearing**: Call `optimizer.zero_grad()` only after the optimization step to allow gradients to accumulate across mini-batches.
-- **Edge case**: If the dataset size isn’t perfectly divisible by desired_batch_size, you may need to handle the last incomplete batch separately (e.g., adjust loss scaling or perform an early optimization step).
+- **Edge case**: If the dataset size isn't perfectly divisible by `desired_batch_size`, you may need to handle the last incomplete batch separately (e.g., adjust loss scaling or perform an early optimization step).
 
 ---
 

@@ -1,5 +1,6 @@
 ---
 toc: false
+math: true
 ---
 
 
@@ -16,3 +17,10 @@ toc: false
 - Guidance on integrating PyTorch with PyTorch Lightning for streamlined training and experiment management.
 - Tips and best practices for debugging, performance optimization, and reproducibility.
 - Useful references and resources for further learning.
+
+\[
+\begin{aligned}
+KL(\hat{y} || y) &= \sum_{c=1}^{M}\hat{y}_c \log{\frac{\hat{y}_c}{y_c}} \\
+JS(\hat{y} || y) &= \frac{1}{2}(KL(y||\frac{y+\hat{y}}{2}) + KL(\hat{y}||\frac{y+\hat{y}}{2}))
+\end{aligned}
+\]
