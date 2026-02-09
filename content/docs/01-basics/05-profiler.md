@@ -6,15 +6,27 @@ sidebar:
 weight: 500
 ---
 
-PyTorch Profiler is a tool that allows the collection of performance metrics during training and inference. Profiler’s context manager API can be used to better understand what model operators are the most expensive, examine their input shapes and stack traces, study device kernel activity and visualize the execution trace.
+PyTorch Profiler is a performance analysis tool for profiling **training and inference** workloads. It enables inspection of:
 
-- It can be used to profile both CPU and GPU operations, providing insights into the performance bottlenecks in your model.
-- The profiler can be integrated with visualization tools like TensorBoard or Chrome Trace Viewer for detailed analyis.
-- use `torch.profiler.profile` to profile the code block. It internally uses `_kinetoProfile` which is a low-level profiler wrapper around `torch.autograd.profiler`. Most of the time, you will use `torch.profiler.profile` to profile your code.
+* CPU and GPU operator execution
+* CUDA kernel launches and execution
+* Memory allocation and usage
+* Input shapes and call stacks
+* Execution timelines (CPU–GPU overlap)
+
+The profiler integrates with visualization tools such as **TensorBoard** and **Chrome Trace Viewer**.
+
+Most users interact with the profiler via:
+
+```python
+torch.profiler.profile
+```
+
+Internally, this API is built on top of **Kineto**, via the internal `_KinetoProfile` class, which acts as a low-level wrapper around `autograd.profiler`.
 
 ---
 
-## Profile code block
+## Basic profiling of a code block
 
 ```python
 import torch
@@ -28,180 +40,242 @@ with torch.profiler.profile(
 ) as p:
     code_to_profile()
 
-# Print the profiling results
-print(p.key_averages().table(sort_by="self_cuda_time_total", row_limit=-1))
+print(p.key_averages().table(
+    sort_by="self_cuda_time_total",
+    row_limit=-1,
+))
 ```
 
-### Arguments:
+### Common arguments
 
-- `activities`: List of activities to profile, such as CPU and CUDA.
-- `profile_memory`: If set to `True`, memory usage will be tracked.
-- `record_shapes`: If set to `True`, the shapes of the inputs and outputs will be recorded.
-- `with_stack`: If set to `True`, stack traces will be recorded for each operation. Increases overhead but useful for debugging.
-- `use_cuda`: **Deprecated**, If set to `True`, CUDA operations will be profiled. Use `ProfilerActivity.CUDA` instead by specifying it in the `activities` argument.
-- `schedule`: callable that takes step (int) as a single parameter and returns `ProfilerAction` value that specifies the profiler action to perform at each step.
-- `on_trace_ready`: callable that is called at each step when schedule returns `ProfilerAction.RECORD_AND_SAVE` during the profiling.
+* **`activities`**
+  Specifies which activities to record:
+
+  * `ProfilerActivity.CPU`
+  * `ProfilerActivity.CUDA`
+
+* **`profile_memory`**
+  Tracks memory allocation and deallocation events.
+
+* **`record_shapes`**
+  Records input/output tensor shapes for each operator.
+
+* **`with_stack`**
+  Records Python stack traces for each operator.
+  ⚠️ Significantly increases overhead.
+
+* **`use_cuda`**
+  ❌ Deprecated. Use `ProfilerActivity.CUDA` instead.
+
+* **`schedule`**
+  Callable controlling when profiling is active.
+
+* **`on_trace_ready`**
+  Callback invoked when a trace becomes available (e.g., export to TensorBoard or Chrome trace).
 
 ---
 
-## PyTorch Profiler with `Schedule`
+## Profiling with a schedule
 
-- Returns a callable that can be used as profiler `schedule` argument. 
+Profiling every iteration is expensive. Instead, PyTorch supports **scheduled profiling**, which divides execution into phases.
 
-- The profiler will skip the first `skip_first` steps,
-- then wait for `wait` steps,
-- then do the warmup for the next `warmup` steps,
-- then do the active recording for the next `active` steps and then repeat the cycle starting with `wait` steps.
-- The optional number of cycles is specified with the `repeat` parameter, the zero value means that the cycles will continue until the profiling is finished.
-- The `skip_first_wait` parameter controls whether the first wait stage should be skipped. This can be useful if a user wants to wait longer than `skip_first` between cycles, but not for the first profile. For example, if `skip_first` is 10 and `wait` is 20, the first cycle will wait 10 + 20 = 30 steps before warmup if `skip_first_wait` is zero, but will wait only 10 steps if `skip_first_wait` is non-zero. All subsequent cycles will then wait 20 steps between the last active and warmup.
+### Schedule phases
+
+A schedule consists of:
+
+1. **skip_first** – initial steps ignored entirely
+2. **wait** – profiler inactive
+3. **warmup** – profiler active but data discarded
+4. **active** – profiler records data
+5. **repeat** – number of cycles (0 = infinite)
+
+This reduces overhead and captures representative iterations.
+
+---
+
+### Example with schedule
 
 ```python
-# Non-default profiler schedule allows user to turn profiler on and off
-# on different iterations of the training loop;
-# trace_handler is called every time a new trace becomes available
 def trace_handler(prof):
     print(
-        prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=-1)
+        prof.key_averages()
+        .table(sort_by="self_cuda_time_total", row_limit=-1)
     )
-    # prof.export_chrome_trace("/tmp/test_trace_" + str(prof.step_num) + ".json")
-
+    # prof.export_chrome_trace(
+    #     f"/tmp/trace_{prof.step_num}.json"
+    # )
 
 with torch.profiler.profile(
     activities=[
         torch.profiler.ProfilerActivity.CPU,
         torch.profiler.ProfilerActivity.CUDA,
     ],
-    # In this example with wait=1, warmup=1, active=2, repeat=1,
-    # profiler will skip the first step/iteration,
-    # start warming up on the second, record
-    # the third and the forth iterations,
-    # after which the trace will become available
-    # and on_trace_ready (when set) is called;
-    # the cycle repeats starting with the next step
-    schedule=torch.profiler.schedule(wait=1, warmup=1, active=2, repeat=1),
+    schedule=torch.profiler.schedule(
+        wait=1,
+        warmup=1,
+        active=2,
+        repeat=1,
+    ),
     on_trace_ready=trace_handler,
-    # on_trace_ready=torch.profiler.tensorboard_trace_handler('./log')
-    # used when outputting for tensorboard
 ) as p:
-    for iter in range(N):
-        code_iteration_to_profile(iter)
-        # send a signal to the profiler that the next iteration has started
+    for it in range(N):
+        code_iteration_to_profile(it)
         p.step()
 ```
 
-- doing `p.step()` at the end of each iteration is necessary to signal the profiler that a new iteration has started. It internally calls `schedule(iter_count)` and if the result is `ProfilerAction.RECORD_AND_SAVE`, it will call `on_trace_ready` with the profiler object.
+### Important note on `p.step()`
+
+* `p.step()` **must be called once per iteration**
+* It advances the internal step counter
+* Internally:
+
+  * Calls `schedule(step)`
+  * Triggers `on_trace_ready` when `RECORD_AND_SAVE`
 
 ---
 
 ## `ProfilerAction`
 
-- it is an enum that defines the actions that the profiler can take at each step of the training loop.
-
-- [original code on github](https://github.com/pytorch/pytorch/blob/97bd4db004ef2527f3e251247a29d822e83a3d97/torch/profiler/profiler.py#L490-L498)
+`ProfilerAction` defines what the profiler does at each step.
 
 ```python
 class ProfilerAction(Enum):
-    """
-    Profiler actions that can be taken at the specified intervals
-    """
-
     NONE = 0
     WARMUP = 1
     RECORD = 2
     RECORD_AND_SAVE = 3
 ```
 
+Meaning:
+
+* **NONE** → profiler disabled
+* **WARMUP** → collect but discard data
+* **RECORD** → collect data
+* **RECORD_AND_SAVE** → collect and trigger callback
+
 ---
 
-## Save chrome's `trace.json`
+## Exporting traces
+
+### Chrome Trace
 
 ```python
-prof.export_chrome_trace("my_trace.json")
+prof.export_chrome_trace("trace.json")
 ```
+
+* Open in `chrome://tracing`
+* Best for low-level CUDA + timeline inspection
 
 ---
 
-## PyTorch Profiler with `Tensorboard`
+## Profiling with TensorBoard
 
-- Install PyTorch Profiler TensorBoard Plugin.
+### Installation
 
 ```bash
 pip install torch_tb_profiler
 ```
 
-- Use `torch.profiler.tensorboard_trace_handler` to save the profiling results in a format compatible with TensorBoard.
+### Writing traces
+
 ```python
-# prof - PyTorch Profiler object
-dir_name = "./log"  # Directory to save the trace files
-torch.profiler.tensorboard_trace_handler(dir_name)(prof)
+torch.profiler.tensorboard_trace_handler("./log")(prof)
 ```
 
-- Start TensorBoard to visualize the profiling results.
+### Launch TensorBoard
 
 ```bash
 tensorboard --logdir=./log
 ```
 
+TensorBoard provides:
+
+* Operator breakdowns
+* Kernel timelines
+* Memory views
+* Overlap visualization
+
 ---
 
-## PyTorch Profiler with `Tensorboard` & `Schedule`
+## TensorBoard profiling with schedule
 
-- pass `torch.profiler.tensorboard_trace_handler` to `on_trace_ready` argument.
+### Without context manager
 
 ```python
-# without using `with` context manager
 prof = torch.profiler.profile(
-        schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=1),
-        on_trace_ready=torch.profiler.tensorboard_trace_handler('./log/resnet18'),
-        record_shapes=True,
-        with_stack=True)
+    schedule=torch.profiler.schedule(
+        wait=1,
+        warmup=1,
+        active=3,
+        repeat=1,
+    ),
+    on_trace_ready=torch.profiler.tensorboard_trace_handler(
+        "./log/resnet18"
+    ),
+    record_shapes=True,
+    with_stack=True,
+)
 
-prof.start() # Start the profiler
+prof.start()
 
-for step, batch_data in enumerate(train_loader):
-    prof.step() # Signal the profiler that a new step has started
+for step, batch in enumerate(train_loader):
+    prof.step()
     if step >= 1 + 1 + 3:
         break
-    train(batch_data)
+    train(batch)
 
-prof.stop() # Stop the profiler
+prof.stop()
 ```
 
-- alternatively, you can use the `with` context manager to automatically start and stop the profiler.
+---
+
+### With context manager (recommended)
 
 ```python
 with torch.profiler.profile(
-        schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=1),
-        on_trace_ready=torch.profiler.tensorboard_trace_handler('./log/resnet18'),
-        record_shapes=True,
-        with_stack=True) as prof:
-    for step, batch_data in enumerate(train_loader):
-        prof.step()  # Signal the profiler that a new step has started
+    schedule=torch.profiler.schedule(
+        wait=1,
+        warmup=1,
+        active=3,
+        repeat=1,
+    ),
+    on_trace_ready=torch.profiler.tensorboard_trace_handler(
+        "./log/resnet18"
+    ),
+    record_shapes=True,
+    with_stack=True,
+) as prof:
+    for step, batch in enumerate(train_loader):
+        prof.step()
         if step >= 1 + 1 + 3:
             break
-        train(batch_data)
+        train(batch)
 ```
 
-original code for enter and exit methods of the context manager:
+---
+
+### Context manager internals (for reference)
 
 ```python
 class profile(_KinetoProfile):
-    ...
-
     def __enter__(self):
         self.start()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.stop()
-        prof.KinetoStepTracker.erase_step_count(PROFILER_STEP_NAME)
+        prof.KinetoStepTracker.erase_step_count(
+            PROFILER_STEP_NAME
+        )
         if self.execution_trace_observer:
             self.execution_trace_observer.cleanup()
 ```
 
 ---
 
-## Switching between CPU and GPU profiling mid execution
+## Dynamically enabling / disabling activities
+
+Profiling can be toggled **mid-execution** without restarting the profiler.
 
 ```python
 with torch.profiler.profile(
@@ -212,22 +286,60 @@ with torch.profiler.profile(
 ) as p:
     code_to_profile_0()
 
-    # turn off collection of all CUDA activity
-    p.toggle_collection_dynamic(False, [torch.profiler.ProfilerActivity.CUDA])
+    p.toggle_collection_dynamic(
+        False, [torch.profiler.ProfilerActivity.CUDA]
+    )
     code_to_profile_1()
 
-    # turn on collection of all CUDA activity
-    p.toggle_collection_dynamic(True, [torch.profiler.ProfilerActivity.CUDA])
+    p.toggle_collection_dynamic(
+        True, [torch.profiler.ProfilerActivity.CUDA]
+    )
     code_to_profile_2()
 
-print(p.key_averages().table(
-    sort_by="self_cuda_time_total", row_limit=-1))
+print(
+    p.key_averages()
+    .table(sort_by="self_cuda_time_total", row_limit=-1)
+)
 ```
 
 ---
 
-## `PyTorch Lightning Profiler`
+## PyTorch Lightning Profiler
 
-- PyTorch Lightning's `pytorch profiler` uses `ScheduleWrapper` to wrap the `pytorch.profiler.schedule`, as pytorch's schedule tracks only one action, but `lightning's schedulewrapper` can perform recording for `training`, `validation`, and `test` separately.
+* PyTorch Lightning wraps `torch.profiler` using `ScheduleWrapper`
+* This allows **separate profiling** of:
 
-- [see lightning's pytorch profiler implementation](https://github.com/Lightning-AI/pytorch-lightning/blob/master/src/lightning/pytorch/profilers/profiler.py)
+  * training
+  * validation
+  * testing
+* Necessary because vanilla PyTorch schedules track a single action stream
+
+Reference implementation:
+
+* [https://github.com/Lightning-AI/pytorch-lightning/blob/master/src/lightning/pytorch/profilers/profiler.py](https://github.com/Lightning-AI/pytorch-lightning/blob/master/src/lightning/pytorch/profilers/profiler.py)
+
+---
+
+## Important caveats (worth remembering)
+
+* Always synchronize before timing manually:
+
+  ```python
+  torch.cuda.synchronize()
+  ```
+* `.item()`, `.cpu()`, and printing CUDA tensors cause **implicit synchronization**
+* Profiling adds overhead — never profile the entire training loop
+* Prefer **few active steps** with warmup
+* High `self_cuda_time` usually indicates kernel cost
+* High CPU time with low CUDA utilization often indicates synchronization or launch overhead
+
+---
+
+## Summary
+
+* PyTorch Profiler is built on **Kineto**
+* Supports CPU, CUDA, memory, and timeline profiling
+* Scheduling is essential to reduce overhead
+* `p.step()` drives the profiler state machine
+* TensorBoard and Chrome Trace provide complementary views
+* Profiler is a diagnostic tool — not a benchmark by itself
