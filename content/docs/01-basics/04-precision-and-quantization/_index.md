@@ -2,7 +2,7 @@
 title: Precision & Quantization
 type: docs
 sidebar:
-  open: true
+  open: false
 weight: 400
 ---
 
