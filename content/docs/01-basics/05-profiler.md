@@ -4,6 +4,7 @@ type: docs
 sidebar:
   open: false
 weight: 500
+math: true
 ---
 
 PyTorch Profiler is a performance analysis tool for profiling **training and inference** workloads. It enables inspection of:

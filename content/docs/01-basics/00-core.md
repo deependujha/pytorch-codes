@@ -1,9 +1,10 @@
 ---
-title: Module vs Parameter vs Buffer 
+title: Module vs Parameter vs Buffer
 type: docs
 sidebar:
   open: false
 weight: 1
+math: true
 ---
 
 ## Core Idea
