@@ -41,7 +41,7 @@ c = a * b
 
 assert a.requires_grad == True and a.grad_fn is None and a.is_leaf == True
 assert b.requires_grad == False and b.grad_fn is None and b.is_leaf == True
-assert c.requires_grad == True and c.grad_fn is not None and c.is_leaf == True
+assert c.requires_grad == True and c.grad_fn is not None and c.is_leaf == False
 ```
 
 ---
